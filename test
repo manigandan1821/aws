@@ -73,3 +73,218 @@ echo "Setup complete for user $username."
 3. SSH Key Generation: If no key path is provided, a new key pair is generated using ssh-keygen.
 4. Permissions: Home and .ssh directories are given correct permissions (chmod 700 for directories, chmod 600 for the authorized_keys file).
 5. Error Handling: Each major step has a check on exit status ($? -ne 0) to ensure the script stops if any command fails.
+
+
+
+Sure! Below is a basic setup for an AWS CodePipeline that integrates with Amazon EKS and ArgoCD to deploy a sample application (Node.js in this case) with SonarQube integration in the buildspec.yaml file. I'll provide the necessary files and explanations.
+
+Overview of Steps:
+Source Stage: Pull the source code from GitHub or AWS CodeCommit.
+Build Stage: Use AWS CodeBuild to build the Docker image, run SonarQube analysis, and push the image to Amazon ECR.
+Deploy Stage: Use ArgoCD to deploy the application to EKS from a Kubernetes manifest file.
+Let's go through the setup in detail.
+
+1. Sample Node.js Application
+app.js (Node.js Application Code)
+javascript
+Copy code
+const express = require('express');
+const app = express();
+const port = 5000;
+
+app.get('/', (req, res) => {
+  res.send('Hello, World!');
+});
+
+app.listen(port, () => {
+  console.log(`App listening at http://localhost:${port}`);
+});
+package.json (Node.js dependencies)
+json
+Copy code
+{
+  "name": "hello-world-nodejs",
+  "version": "1.0.0",
+  "description": "A simple Hello World app in Node.js",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.17.1"
+  }
+}
+2. Dockerfile
+The Dockerfile defines the container image build process.
+
+Dockerfile
+Dockerfile
+Copy code
+# Use the official Node.js image from Docker Hub
+FROM node:16
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy the package.json and package-lock.json first
+COPY package*.json ./
+
+# Install the application dependencies
+RUN npm install
+
+# Copy the rest of the application code
+COPY . .
+
+# Expose port 5000 for the app
+EXPOSE 5000
+
+# Command to run the app
+CMD ["npm", "start"]
+3. Kubernetes Manifest for EKS Deployment
+This manifest defines the Kubernetes resources required to run the Node.js app on EKS (Deployment and Service).
+
+app-deployment.yaml
+yaml
+Copy code
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world-nodejs
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hello-world-nodejs
+  template:
+    metadata:
+      labels:
+        app: hello-world-nodejs
+    spec:
+      containers:
+        - name: hello-world-nodejs
+          image: <ecr_repo_url>/hello-world-nodejs:latest # Replace with your ECR image URL
+          ports:
+            - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-world-nodejs-service
+spec:
+  selector:
+    app: hello-world-nodejs
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: LoadBalancer
+4. ArgoCD Application Manifest
+This file defines the ArgoCD application configuration to sync and deploy the app to EKS.
+
+argocd-app.yaml
+yaml
+Copy code
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-world-nodejs
+  namespace: argocd
+spec:
+  destination:
+    namespace: default
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: k8s-manifests
+    repoURL: '<your_git_repo_url>'  # Replace with your Git repository URL
+    targetRevision: HEAD
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+5. buildspec.yml (AWS CodeBuild Configuration)
+This file defines the steps that AWS CodeBuild will follow to build the Docker image, run SonarQube analysis, and push the image to Amazon ECR.
+
+buildspec.yml
+yaml
+Copy code
+version: 0.2
+
+env:
+  variables:
+    SONARQUBE_URL: "<sonarqube_url>"  # SonarQube server URL
+    SONARQUBE_TOKEN: "<sonarqube_token>"  # SonarQube authentication token
+    AWS_ACCOUNT_ID: "<aws_account_id>"  # Your AWS account ID
+    AWS_REGION: "us-west-2"  # Update to your AWS region
+    ECR_REPO_NAME: "hello-world-nodejs"  # Your ECR repository name
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 16
+    commands:
+      - echo Installing dependencies...
+      - npm install
+
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      - echo Starting SonarQube scan...
+      - sonar-scanner -Dsonar.projectKey=hello-world-nodejs -Dsonar.sources=. -Dsonar.host.url=$SONARQUBE_URL -Dsonar.login=$SONARQUBE_TOKEN
+
+  build:
+    commands:
+      - echo Building Docker image...
+      - docker build -t $ECR_REPO_NAME .
+      - docker tag $ECR_REPO_NAME:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
+
+  post_build:
+    commands:
+      - echo Pushing Docker image to ECR...
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
+      - echo Build complete.
+
+artifacts:
+  files:
+    - app-deployment.yaml
+    - argocd-app.yaml
+6. AWS CodePipeline Setup
+To set up the AWS CodePipeline, you’ll create the following stages:
+
+1. Source Stage:
+Source: Choose either GitHub or AWS CodeCommit as your source provider.
+Output Artifact: Store the code artifact that will be used in the next stage (e.g., SourceOutput).
+2. Build Stage:
+Build Provider: Select AWS CodeBuild.
+Build Project: Create a new CodeBuild project:
+Choose the runtime as Node.js.
+Add the buildspec.yml file to the project.
+Make sure the CodeBuild role has the required permissions to access ECR, SonarQube, and AWS resources.
+3. Deploy Stage:
+Deploy Provider: Choose Amazon EKS or ArgoCD (if you use ArgoCD as a separate service for deployment).
+If you’re using ArgoCD, configure the syncing of the app using the ArgoCD argocd-app.yaml file.
+4. Configure ECR:
+In the Build phase of the pipeline, you should configure AWS ECR to hold your Docker image.
+Make sure you've created the ECR repository (hello-world-nodejs) beforehand.
+5. Configure ArgoCD:
+Set up ArgoCD in your Kubernetes environment.
+Create an Application in ArgoCD using the argocd-app.yaml manifest to pull from the Git repository containing your Kubernetes manifests.
+Conclusion
+This setup will give you the following components:
+
+Node.js Source Code: A basic "Hello World" application (app.js and package.json).
+Dockerfile: A Dockerfile to containerize the Node.js application.
+Kubernetes Deployment: A Kubernetes manifest (app-deployment.yaml) to deploy the app on EKS.
+ArgoCD: A manifest (argocd-app.yaml) to manage deployments on EKS using ArgoCD.
+buildspec.yml: AWS CodeBuild configuration with SonarQube integration for code quality analysis and Docker image build/push to ECR.
+Workflow:
+CodePipeline triggers from a Git source.
+AWS CodeBuild builds the Docker image and runs SonarQube static analysis.
+The Docker image is pushed to Amazon ECR.
+ArgoCD is triggered to deploy the image on Amazon EKS using the Kubernetes manifests.
+Let me know if you need further details or adjustments to any part!
+
+
+
+
