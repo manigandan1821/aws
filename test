@@ -1,1 +1,75 @@
-test
+[11/8, 21:04] Bharath Office: #!/bin/bash
+
+# Check for root privileges
+if [ "$EUID" -ne 0 ]; then
+  echo "Please run this script as root."
+  exit 1
+fi
+
+# Prompt for a new username
+read -p "Enter the new username: " username
+
+# Check if user already exists
+if id "$username" &>/dev/null; then
+  echo "User $username already exists. Exiting."
+  exit 1
+fi
+
+# Create the new user and set up home directory
+useradd -m -s /bin/bash "$username"
+if [ $? -ne 0 ]; then
+  echo "Error creating user $username. Exiting."
+  exit 1
+fi
+echo "User $username created successfully."
+
+# Generate SSH key pair if not provided
+read -p "Enter path to an existing SSH public key (or press Enter to generate a new one): " ssh_key_path
+if [ -z "$ssh_key_path" ]; then
+  # Generate SSH key pair
+  su - "$username" -c "ssh-keygen -t rsa -b 4096 -N '' -f ~/.ssh/id_rsa"
+  ssh_key_path="/home/$username/.ssh/id_rsa.pub"
+  echo "New SSH key pair generated for $username."
+fi
+
+# Ensure home directory and permissions are set
+home_dir="/home/$username"
+chmod 700 "$home_dir"
+chown "$username:$username" "$home_dir"
+echo "Home directory and permissions set for $username."
+
+# Add user to sudo group
+usermod -aG sudo "$username"
+if [ $? -ne 0 ]; then
+  echo "Failed to add $username to sudo group. Exiting."
+  exit 1
+fi
+echo "$username added to sudo group."
+
+# Configure SSH: Place the public key in ~/.ssh/authorized_keys
+ssh_dir="$home_dir/.ssh"
+auth_keys="$ssh_dir/authorized_keys"
+
+mkdir -p "$ssh_dir"
+chmod 700 "$ssh_dir"
+chown "$username:$username" "$ssh_dir"
+
+# Copy the SSH public key to authorized_keys
+if [ -f "$ssh_key_path" ]; then
+  cat "$ssh_key_path" > "$auth_keys"
+  chmod 600 "$auth_keys"
+  chown "$username:$username" "$auth_keys"
+  echo "SSH public key added for $username."
+else
+  echo "Specified SSH key path not found. Exiting."
+  exit 1
+fi
+
+echo "Setup complete for user $username."
+[11/8, 21:05] Bharath Office: Note:
+
+1. Root Check: if [ "$EUID" -ne 0 ]; ensures the script is only run by the root user.
+2. User Creation: useradd -m -s /bin/bash creates a new user with a home directory.
+3. SSH Key Generation: If no key path is provided, a new key pair is generated using ssh-keygen.
+4. Permissions: Home and .ssh directories are given correct permissions (chmod 700 for directories, chmod 600 for the authorized_keys file).
+5. Error Handling: Each major step has a check on exit status ($? -ne 0) to ensure the script stops if any command fails.
